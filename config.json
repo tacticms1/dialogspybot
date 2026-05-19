@@ -1,0 +1,11 @@
+{
+    "BOT_TOKEN": "8819070930:AAFKDEpnlNUTm_0V5L2F7KQn0_yC-gXtnoY",
+    "OWNER_ID": 1087194622,
+    "DATABASE_NAME": "messages.json",
+    "MESSAGES": {
+        "START_TEXT": "DialogSpy bot ishga tushdi! (JSON orqali boshqarilmoqda)",
+        "EDIT_TEMPLATE": "✍️ Xabar o'zgartirildi!\nKim: {name}\nOld: {old}\nNew: {new}",
+        "DELETE_TEMPLATE": "🗑 Xabar o'chirildi!\nKim: {name}\nKontent: {content}",
+        "UNAUTHORIZED": "Bu bot shaxsiy foydalanish uchun."
+    }
+}
