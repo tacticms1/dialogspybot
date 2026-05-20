@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sys
+import httpx # O'z-o'zini ping qilish uchun
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import BusinessMessagesDeleted, Message, BusinessConnection
 from aiogram.filters import Command
@@ -15,9 +16,10 @@ def load_config():
         "BOT_TOKEN": os.getenv("BOT_TOKEN", "8819070930:AAFKDEpnlNUTm_0V5L2F7KQn0_yC-gXtnoY"),
         "OWNER_ID": int(os.getenv("OWNER_ID", 1087194622)),
         "DATABASE_NAME": "messages.json",
-        "CONN_DB": "connections.json", # Ulanishlarni saqlash uchun
+        "CONN_DB": "connections.json",
+        "RENDER_URL": os.getenv("RENDER_EXTERNAL_URL"), # Render avtomatik beradigan URL
         "MESSAGES": {
-            "START_TEXT": "DialogSpy bot ishga tushdi! Endi biznes hisobingizni ulab, o'chirilgan xabarlarni kuzatishingiz mumkin.",
+            "START_TEXT": "DialogSpy bot ishga tushdi!",
             "EDIT_TEMPLATE": "✍️ Xabar o'zgartirildi!\nKim: {name}\nOld: {old}\nNew: {new}",
             "DELETE_TEMPLATE": "🗑 Xabar o'chirildi!\nKim: {name}\nKontent: {content}",
             "UNAUTHORIZED": "Bu bot shaxsiy foydalanish uchun."
@@ -26,7 +28,7 @@ def load_config():
 
 CONFIG = load_config()
 
-# 2. Flask Web Server (Render uchun)
+# 2. Flask Web Server
 app = Flask(__name__)
 @app.route('/')
 def home(): return "Bot is running!"
@@ -34,6 +36,22 @@ def home(): return "Bot is running!"
 def run_web():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
+# --- O'z-o'zini uyg'otish (Self-Ping) funksiyasi ---
+async def self_ping():
+    url = CONFIG["RENDER_URL"]
+    if not url:
+        return
+    
+    async with httpx.AsyncClient() as client:
+        while True:
+            try:
+                # Har 10 daqiqada o'z-o'ziga so'rov yuboradi
+                await asyncio.sleep(600)
+                await client.get(url)
+                logging.info("Self-ping muvaffaqiyatli!")
+            except Exception as e:
+                logging.error(f"Self-ping xatosi: {e}")
 
 # 3. Logging
 logging.basicConfig(level=logging.INFO)
@@ -56,29 +74,21 @@ def save_db(file_name, db):
         json.dump(db, f, indent=4, ensure_ascii=False)
 
 # 6. Handlerlar
-
-# Biznes ulanishlarni saqlash (kim botni ulaganini bilish uchun)
 @dp.business_connection()
 async def on_business_connection(conn: BusinessConnection):
     conns = get_db(CONFIG["CONN_DB"])
     if conn.is_enabled:
         conns[conn.id] = conn.user.id
-        logger.info(f"Yangi ulanish: {conn.id} -> User: {conn.user.id}")
     else:
-        if conn.id in conns:
-            del conns[conn.id]
-            logger.info(f"Ulanish uzildi: {conn.id}")
+        if conn.id in conns: del conns[conn.id]
     save_db(CONFIG["CONN_DB"], conns)
 
 @dp.business_message()
 async def on_msg(m: Message):
     db = get_db(CONFIG["DATABASE_NAME"])
     conns = get_db(CONFIG["CONN_DB"])
-    
-    # Xabar egasini (biznes egasini) aniqlash
     owner_id = conns.get(m.business_connection_id)
-    if not owner_id:
-        return # Agar ulanish bazada bo'lmasa, saqlamaymiz
+    if not owner_id: return
 
     name = m.from_user.full_name if m.from_user else "Noma'lum"
     f_id, m_type = None, "text"
@@ -90,7 +100,7 @@ async def on_msg(m: Message):
     elif m.audio: f_id, m_type = m.audio.file_id, "audio"
 
     db[f"{m.chat.id}_{m.message_id}"] = {
-        "owner_id": owner_id, # Xabar aynan kimniki ekanini saqlaymiz
+        "owner_id": owner_id,
         "name": name,
         "text": m.text or m.caption or "",
         "file_id": f_id,
@@ -109,7 +119,6 @@ async def on_edit(m: Message):
             old=old["text"] or "[Media]",
             new=m.text or m.caption or "[Media]"
         )
-        # Xabarnomani FAQAT o'sha biznes egasiga yuboramiz
         await bot.send_message(old["owner_id"], text)
     await on_msg(m)
 
@@ -122,7 +131,6 @@ async def on_delete(ev: BusinessMessagesDeleted):
             old = db[key]
             cap = CONFIG["MESSAGES"]["DELETE_TEMPLATE"].format(name=old["name"], content=old["text"])
             target_id, fid, mt = old["owner_id"], old["file_id"], old["type"]
-            
             try:
                 if mt == "text" or not fid: await bot.send_message(target_id, cap)
                 elif mt == "photo": await bot.send_photo(target_id, fid, caption=cap)
@@ -139,7 +147,15 @@ async def on_delete(ev: BusinessMessagesDeleted):
 async def start(m: Message):
     await m.answer(CONFIG["MESSAGES"]["START_TEXT"])
 
-if __name__ == "__main__":
+async def main():
     Thread(target=run_web).start()
-    print("Bot started for multi-users...")
-    asyncio.run(dp.start_polling(bot))
+    # O'z-o'zini ping qilishni boshlash
+    asyncio.create_task(self_ping())
+    logger.info("Bot polling boshlandi...")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        pass
