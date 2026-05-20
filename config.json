@@ -1,9 +1,10 @@
 {
-    "BOT_TOKEN": "8819070930:AAFKDEpnlNUTm_0V5L2F7KQn0_yC-gXtnoY",
+    "BOT_TOKEN": "8819070930:AAHk9Zzer7d_phkG7AZ2L3nvCFYFCgqHPkU",
     "OWNER_ID": 1087194622,
     "DATABASE_NAME": "messages.json",
+    "CONN_DB": "connections.json",
     "MESSAGES": {
-        "START_TEXT": "DialogSpy bot ishga tushdi! (JSON orqali boshqarilmoqda)",
+        "START_TEXT": "DialogSpy bot ishga tushdi! Endi biznes hisobingizni ulab, o'chirilgan xabarlarni kuzatishingiz mumkin.",
         "EDIT_TEMPLATE": "✍️ Xabar o'zgartirildi!\nKim: {name}\nOld: {old}\nNew: {new}",
         "DELETE_TEMPLATE": "🗑 Xabar o'chirildi!\nKim: {name}\nKontent: {content}",
         "UNAUTHORIZED": "Bu bot shaxsiy foydalanish uchun."
