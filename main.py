@@ -125,16 +125,22 @@ async def process_broadcast(m: Message):
     
     await m.answer(f"✅ Xabar {count} ta foydalanuvchiga yetkazildi.")
 
-# --- Biznes Mantiqi (Oldingi kodlar saqlangan) ---
-
+# 3. Handlerlar
 @dp.business_connection()
 async def on_business_connection(conn: BusinessConnection):
     conns = get_db(CONFIG["CONN_DB"])
+    status = "ulandi" if conn.is_enabled else "uzildi"
     if conn.is_enabled:
         conns[conn.id] = {"user_id": conn.user.id, "full_name": conn.user.full_name}
     else:
         if conn.id in conns: del conns[conn.id]
     save_db(CONFIG["CONN_DB"], conns)
+    
+    logging.info(f"Biznes hisob {status}: {conn.id}")
+    try:
+        await bot.send_message(CONFIG["OWNER_ID"], f"🔔 Biznes hisobingiz botga {status}!")
+    except Exception as e:
+        logging.error(f"Connection xabari yuborishda xato: {e}")
 
 @dp.business_message()
 async def on_msg(m: Message):
@@ -143,6 +149,7 @@ async def on_msg(m: Message):
     conn_info = conns.get(m.business_connection_id)
     if not conn_info: return
 
+    name = m.from_user.full_name if m.from_user else "Noma'lum"
     f_id, m_type = None, "text"
     if m.photo: f_id, m_type = m.photo[-1].file_id, "photo"
     elif m.video: f_id, m_type = m.video.file_id, "video"
@@ -150,16 +157,20 @@ async def on_msg(m: Message):
     elif m.voice: f_id, m_type = m.voice.file_id, "voice"
     elif m.video_note: f_id, m_type = m.video_note.file_id, "video_note"
     elif m.audio: f_id, m_type = m.audio.file_id, "audio"
+    elif m.sticker: f_id, m_type = m.sticker.file_id, "sticker"
+    elif m.animation: f_id, m_type = m.animation.file_id, "animation"
 
-    db[f"{m.chat.id}_{m.message_id}"] = {
+    key = f"{m.chat.id}_{m.message_id}"
+    db[key] = {
         "owner_id": conn_info["user_id"],
         "owner_name": conn_info["full_name"],
-        "name": m.from_user.full_name if m.from_user else "Noma'lum",
+        "name": name,
         "text": m.text or m.caption or "",
         "file_id": f_id,
         "type": m_type
     }
     save_db(CONFIG["DATABASE_NAME"], db)
+    logging.info(f"Xabar saqlandi: {key} ({name}) | Tur: {m_type}")
 
 @dp.edited_business_message()
 async def on_edit(m: Message):
