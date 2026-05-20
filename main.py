@@ -2,45 +2,95 @@ import asyncio
 import json
 import logging
 import os
+import sys
+import httpx # O'z-o'zini ping qilish uchun
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import BusinessMessagesDeleted, Message
+from aiogram.types import BusinessMessagesDeleted, Message, BusinessConnection
 from aiogram.filters import Command
-from aiogram.exceptions import TelegramUnauthorizedError
+from flask import Flask
+from threading import Thread
 
-# 1. JSON dan barcha sozlamalarni yuklash
+# 1. Sozlamalar
 def load_config():
-    with open("config.json", "r", encoding="utf-8") as f:
-        return json.load(f)
+    return {
+        "BOT_TOKEN": os.getenv("BOT_TOKEN", "8819070930:AAFKDEpnlNUTm_0V5L2F7KQn0_yC-gXtnoY"),
+        "OWNER_ID": int(os.getenv("OWNER_ID", 1087194622)),
+        "DATABASE_NAME": "messages.json",
+        "CONN_DB": "connections.json",
+        "RENDER_URL": os.getenv("RENDER_EXTERNAL_URL"), # Render avtomatik beradigan URL
+        "MESSAGES": {
+            "START_TEXT": "DialogSpy bot ishga tushdi!",
+            "EDIT_TEMPLATE": "✍️ Xabar o'zgartirildi!\nKim: {name}\nOld: {old}\nNew: {new}",
+            "DELETE_TEMPLATE": "🗑 Xabar o'chirildi!\nKim: {name}\nKontent: {content}",
+            "UNAUTHORIZED": "Bu bot shaxsiy foydalanish uchun."
+        }
+    }
 
 CONFIG = load_config()
-MSGS = CONFIG["MESSAGES"]
 
-# Botni sozlash
-try:
-    bot = Bot(token=CONFIG["BOT_TOKEN"])
-    dp = Dispatcher()
-except Exception:
-    print("\n[!] XATO: config.json ichidagi BOT_TOKEN noto'g'ri!")
-    exit()
+# 2. Flask Web Server
+app = Flask(__name__)
+@app.route('/')
+def home(): return "Bot is running!"
 
-# 2. JSON Baza (Xabarlarni saqlash uchun)
-def get_db():
-    if os.path.exists(CONFIG["DATABASE_NAME"]):
-        with open(CONFIG["DATABASE_NAME"], "r", encoding="utf-8") as f:
-            return json.load(f)
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+# --- O'z-o'zini uyg'otish (Self-Ping) funksiyasi ---
+async def self_ping():
+    url = CONFIG["RENDER_URL"]
+    if not url:
+        return
+    
+    async with httpx.AsyncClient() as client:
+        while True:
+            try:
+                # Har 10 daqiqada o'z-o'ziga so'rov yuboradi
+                await asyncio.sleep(600)
+                await client.get(url)
+                logging.info("Self-ping muvaffaqiyatli!")
+            except Exception as e:
+                logging.error(f"Self-ping xatosi: {e}")
+
+# 3. Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# 4. Bot sozlamalari
+bot = Bot(token=CONFIG["BOT_TOKEN"])
+dp = Dispatcher()
+
+# 5. Baza funksiyalari (JSON)
+def get_db(file_name):
+    if os.path.exists(file_name):
+        with open(file_name, "r", encoding="utf-8") as f:
+            try: return json.load(f)
+            except: return {}
     return {}
 
-def save_db(db):
-    with open(CONFIG["DATABASE_NAME"], "w", encoding="utf-8") as f:
+def save_db(file_name, db):
+    with open(file_name, "w", encoding="utf-8") as f:
         json.dump(db, f, indent=4, ensure_ascii=False)
 
-# 3. Handlerlar
+# 6. Handlerlar
+@dp.business_connection()
+async def on_business_connection(conn: BusinessConnection):
+    conns = get_db(CONFIG["CONN_DB"])
+    if conn.is_enabled:
+        conns[conn.id] = conn.user.id
+    else:
+        if conn.id in conns: del conns[conn.id]
+    save_db(CONFIG["CONN_DB"], conns)
+
 @dp.business_message()
 async def on_msg(m: Message):
-    db = get_db()
+    db = get_db(CONFIG["DATABASE_NAME"])
+    conns = get_db(CONFIG["CONN_DB"])
+    owner_id = conns.get(m.business_connection_id)
+    if not owner_id: return
+
     name = m.from_user.full_name if m.from_user else "Noma'lum"
-    
-    # Medianini aniqlash
     f_id, m_type = None, "text"
     if m.photo: f_id, m_type = m.photo[-1].file_id, "photo"
     elif m.video: f_id, m_type = m.video.file_id, "video"
@@ -50,62 +100,62 @@ async def on_msg(m: Message):
     elif m.audio: f_id, m_type = m.audio.file_id, "audio"
 
     db[f"{m.chat.id}_{m.message_id}"] = {
+        "owner_id": owner_id,
         "name": name,
         "text": m.text or m.caption or "",
         "file_id": f_id,
         "type": m_type
     }
-    save_db(db)
+    save_db(CONFIG["DATABASE_NAME"], db)
 
 @dp.edited_business_message()
 async def on_edit(m: Message):
-    db = get_db()
+    db = get_db(CONFIG["DATABASE_NAME"])
     key = f"{m.chat.id}_{m.message_id}"
     if key in db:
         old = db[key]
-        text = MSGS["EDIT_TEMPLATE"].format(
+        text = CONFIG["MESSAGES"]["EDIT_TEMPLATE"].format(
             name=old["name"],
             old=old["text"] or "[Media]",
             new=m.text or m.caption or "[Media]"
         )
-        await bot.send_message(CONFIG["OWNER_ID"], text)
+        await bot.send_message(old["owner_id"], text)
     await on_msg(m)
 
 @dp.deleted_business_messages()
 async def on_delete(ev: BusinessMessagesDeleted):
-    db = get_db()
+    db = get_db(CONFIG["DATABASE_NAME"])
     for mid in ev.message_ids:
         key = f"{ev.chat.id}_{mid}"
         if key in db:
             old = db[key]
-            cap = MSGS["DELETE_TEMPLATE"].format(name=old["name"], content=old["text"])
-            oid, fid, mt = CONFIG["OWNER_ID"], old["file_id"], old["type"]
-            
+            cap = CONFIG["MESSAGES"]["DELETE_TEMPLATE"].format(name=old["name"], content=old["text"])
+            target_id, fid, mt = old["owner_id"], old["file_id"], old["type"]
             try:
-                if mt == "text" or not fid: await bot.send_message(oid, cap)
-                elif mt == "photo": await bot.send_photo(oid, fid, caption=cap)
-                elif mt == "video": await bot.send_video(oid, fid, caption=cap)
-                elif mt == "document": await bot.send_document(oid, fid, caption=cap)
-                elif mt == "voice": await bot.send_voice(oid, fid, caption=cap)
-                elif mt == "audio": await bot.send_audio(oid, fid, caption=cap)
+                if mt == "text" or not fid: await bot.send_message(target_id, cap)
+                elif mt == "photo": await bot.send_photo(target_id, fid, caption=cap)
+                elif mt == "video": await bot.send_video(target_id, fid, caption=cap)
+                elif mt == "document": await bot.send_document(target_id, fid, caption=cap)
+                elif mt == "voice": await bot.send_voice(target_id, fid, caption=cap)
+                elif mt == "audio": await bot.send_audio(target_id, fid, caption=cap)
                 elif mt == "video_note":
-                    await bot.send_video_note(oid, fid)
-                    await bot.send_message(oid, cap)
-            except Exception: pass
+                    await bot.send_video_note(target_id, fid)
+                    await bot.send_message(target_id, cap)
+            except: pass
 
 @dp.message(Command("start"))
 async def start(m: Message):
-    if m.from_user.id == CONFIG["OWNER_ID"]:
-        await m.answer(MSGS["START_TEXT"])
-    else:
-        await m.answer(MSGS["UNAUTHORIZED"])
+    await m.answer(CONFIG["MESSAGES"]["START_TEXT"])
 
 async def main():
-    print(f"\n[+] Bot ishga tushdi! (Ega ID: {CONFIG['OWNER_ID']})")
-    try:
-        await dp.start_polling(bot)
-    except TelegramUnauthorizedError:
-        print("\n[!] XATO: config.json dagi token noto'g'ri!")
+    Thread(target=run_web).start()
+    # O'z-o'zini ping qilishni boshlash
+    asyncio.create_task(self_ping())
+    logger.info("Bot polling boshlandi...")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        pass
