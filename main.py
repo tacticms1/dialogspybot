@@ -186,7 +186,7 @@ async def on_edit(m: Message):
             await bot.send_message(OWNER_ID, f"🕵️ **MONITORING** ({old['owner_name']}):\n{text}")
     await on_msg(m)
 
-@dp.business_messages_deleted()
+@dp.deleted_business_messages()
 async def on_delete(ev: BusinessMessagesDeleted):
     db = get_db(CONFIG["DATABASE_NAME"])
     for mid in ev.message_ids:
